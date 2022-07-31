@@ -105,12 +105,8 @@ const server = createServer((c) => {
     try {
       parsedData = JSON.parse(data);
     } catch (e) {
-      if (e instanceof Error) {
-        console.error(e);
-        c.write(e.message);
-      } else {
-        throw e;
-      }
+      console.log('data', data);
+      throw e;
     }
 
     if (parsedData.command === 'register') {
@@ -153,9 +149,10 @@ const server = createServer((c) => {
   });
 });
 
-server.on('error', (err) => {
-  throw err;
+server.on('error', (e) => {
+  throw e;
 });
+
 server.listen(serverPort, () => {
   console.log('server bound on port', serverPort);
 });

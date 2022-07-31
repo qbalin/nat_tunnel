@@ -21,16 +21,17 @@ const forwardPortString = process.argv[forwardPortKeyIndex + 1];
 const forwardPort = parseInt(forwardPortString, 10);
 
 const setupSocketToPeer = (socketToServer: Socket, peerAddress: Address, portToForward: number, networkType: 'public' | 'private') => {
-  console.log(`\nAttempting private connection towards ${peerAddress}`);
+  console.log(`\nAttempting ${networkType} connection towards ${peerAddress}`);
+  console.log('socketToServer.address()', socketToServer.address());
+
   const socketToPeer = createConnection({
     localPort: socketToServer.localPort,
-    localAddress: socketToServer.localAddress,
     port: peerAddress.port,
     host: peerAddress.host,
   });
   socketToPeer.on('error', (e) => {
     console.error(`Failed to connect with peer on ${networkType} network`);
-    console.error(e);
+    throw e;
   });
 
   socketToPeer.on('connect', () => {
@@ -41,15 +42,15 @@ const setupSocketToPeer = (socketToServer: Socket, peerAddress: Address, portToF
       localSocket.pipe(socketToPeer);
       socketToPeer.pipe(localSocket);
     });
-    localSocket.on('error', (err) => {
-      if (err.message.includes('ECONNREFUSED')) {
+    localSocket.on('error', (e) => {
+      if (e.message.includes('ECONNREFUSED')) {
         console.log(`No server is running on port ${portToForward}. Starting one.`);
         createServer((c) => {
           c.pipe(socketToPeer);
           socketToPeer.pipe(c);
         }).listen(portToForward);
       } else {
-        throw err;
+        throw e;
       }
     });
   });
@@ -79,10 +80,10 @@ socket.on('data', (data: string) => {
     console.log(`\tPrivately: ${peerPrivateAddress}`);
     console.log(`\tPublicly: ${peerPublicAddress}`);
 
-    const socketToPrivatePeer = setupSocketToPeer(socket, peerPublicAddress, forwardPort, 'private');
+    // const socketToPrivatePeer = setupSocketToPeer(socket, peerPrivateAddress, forwardPort, 'private');
     const socketToPublicPeer = setupSocketToPeer(socket, peerPublicAddress, forwardPort, 'public');
-    socketToPrivatePeer.on('connect', socketToPublicPeer.end);
-    socketToPublicPeer.on('connect', socketToPrivatePeer.end);
+    // socketToPrivatePeer.on('connect', socketToPublicPeer.end);
+    // socketToPublicPeer.on('connect', socketToPrivatePeer.end);
   }
 });
 
@@ -97,6 +98,6 @@ socket.on('connect', () => {
   ));
 });
 
-socket.on('error', (err) => {
-  throw err;
+socket.on('error', (e) => {
+  throw e;
 });
