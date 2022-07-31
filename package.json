@@ -1,0 +1,24 @@
+{
+  "name": "hole_punching",
+  "version": "1.0.0",
+  "main": "./build/index.js",
+  "author": "Quentin Balin",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^18.0.6",
+    "@typescript-eslint/eslint-plugin": "^5.31.0",
+    "@typescript-eslint/parser": "^5.31.0",
+    "eslint": "^7.32.0 || ^8.2.0",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-config-prettier": "^8.5.0",
+    "eslint-plugin-import": "^2.25.2",
+    "eslint-plugin-prettier": "^4.2.1",
+    "prettier": "2.7.1",
+    "typescript": "^4.7.4"
+  },
+  "scripts": {
+    "dev": "npx tsc -w",
+    "lint": "yarn eslint .",
+    "start": "node ./build/index.js"
+  }
+}
