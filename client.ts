@@ -58,11 +58,11 @@ const setupSocketToPeer = (socketToServer: Socket, peerAddress: Address, portToF
   return socketToPeer;
 };
 
-const socket = createConnection({
+const socketToServer = createConnection({
   port: serverPort,
   host: serverHost,
 });
-socket.on('data', (data: string) => {
+socketToServer.on('data', (data: string) => {
   console.log('data', data);
   let parsedData: any = null;
   try {
@@ -81,24 +81,24 @@ socket.on('data', (data: string) => {
     console.log(`\tPrivately: ${peerPrivateAddress}`);
     console.log(`\tPublicly: ${peerPublicAddress}`);
 
-    // const socketToPrivatePeer = setupSocketToPeer(socket, peerPrivateAddress, forwardPort, 'private');
-    const socketToPublicPeer = setupSocketToPeer(socket, peerPublicAddress, forwardPort, 'public');
+    // const socketToPrivatePeer = setupSocketToPeer(socketToServer, peerPrivateAddress, forwardPort, 'private');
+    const socketToPublicPeer = setupSocketToPeer(socketToServer, peerPublicAddress, forwardPort, 'public');
     // socketToPrivatePeer.on('connect', socketToPublicPeer.end);
     // socketToPublicPeer.on('connect', socketToPrivatePeer.end);
   }
 });
 
-socket.on('connect', () => {
-  console.log('Connected to the server from', socket.address());
-  socket.write(JSON.stringify(
+socketToServer.on('connect', () => {
+  console.log('Connected to the server from', socketToServer.address());
+  socketToServer.write(JSON.stringify(
     {
       command: 'register',
-      localPort: socket.localPort,
-      localAddress: socket.localAddress,
+      localPort: socketToServer.localPort,
+      localAddress: socketToServer.localAddress,
     },
   ));
 });
 
-socket.on('error', (e) => {
+socketToServer.on('error', (e) => {
   throw e;
 });
