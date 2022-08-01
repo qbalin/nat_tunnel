@@ -31,6 +31,7 @@ const setupSocketToPeer = (socketToServer: Socket, peerAddress: Address, portToF
   });
   socketToPeer.on('error', (e) => {
     console.error(`Failed to connect with peer on ${networkType} network`);
+    console.error('Are you running the rendez-vous server on the same machine as this client by any chance? You should not. TODO: understand why.');
     throw e;
   });
 
