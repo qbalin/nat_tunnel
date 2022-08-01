@@ -38,14 +38,14 @@ const setupSocketToPeer = (socketToServer: Socket, peerAddress: Address, portToF
   socketToPeer.on('connect', () => {
     console.log(`Connected to ${networkType} peer!`);
     console.log(`${networkType} socket info:`, socketToPeer.address());
-    const localSocket = createConnection({ port: portToForward });
-    localSocket.on('connect', () => {
-      localSocket.pipe(socketToPeer);
-      socketToPeer.pipe(localSocket);
+    const socketToLocalPort = createConnection({ port: portToForward });
+    socketToLocalPort.on('connect', () => {
+      socketToLocalPort.pipe(socketToPeer);
+      socketToPeer.pipe(socketToLocalPort);
     });
-    localSocket.on('error', (e) => {
+    socketToLocalPort.on('error', (e) => {
       if (e.message.includes('ECONNREFUSED')) {
-        console.log(`No server is running on port ${portToForward}. Starting one.`);
+        console.log(`No server is running on port ${portToForward}, or the connection was refused. Starting one.`);
         createServer((c) => {
           c.pipe(socketToPeer);
           socketToPeer.pipe(c);
