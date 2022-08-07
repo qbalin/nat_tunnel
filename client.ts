@@ -1,4 +1,6 @@
-import { createConnection, createServer, Socket } from 'net';
+import {
+  createConnection, createServer,
+} from 'net';
 import Address from './address';
 
 const forwardPortKeyIndex = process.argv.findIndex((entry, index) => index > 1 && ['--forward-port', '-fp'].includes(entry));
@@ -20,19 +22,57 @@ const serverPort = parseInt(serverPortString, 10);
 const forwardPortString = process.argv[forwardPortKeyIndex + 1];
 const forwardPort = parseInt(forwardPortString, 10);
 
-const setupSocketToPeer = (socketToServer: Socket, peerAddress: Address, portToForward: number, networkType: 'public' | 'private') => {
-  console.log(`\nAttempting ${networkType} connection towards ${peerAddress}`);
-  console.log('socketToServer.address()', socketToServer.address());
+function limitExecutionCount(fn: (...args1: any[]) => void, limit: number) {
+  let executionCount = 0;
+  return (...args2: any[]) => {
+    if (executionCount >= limit) {
+      throw new Error('retry count exhausted');
+    }
+    console.log('Retrying', executionCount, limit);
+    executionCount += 1;
+    return fn(...args2);
+  };
+}
 
-  const socketToPeer = createConnection({
-    localPort: socketToServer.localPort,
+function throttle<T>(fn: (...args1: any[]) => T, delay: number) {
+  return (...args2: any[]) => new Promise((resolve, reject) => {
+    setTimeout(() => {
+      try {
+        resolve(fn(...args2));
+      } catch (e) {
+        reject(e);
+      }
+    }, delay);
+  });
+}
+
+const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address, portToForward: number, networkType: 'public' | 'private', socketToServer) => {
+  console.log(`\nAttempting ${networkType} connection towards ${peerAddress}`);
+  console.log('localPortUsedWithServer', localPortUsedWithServer);
+
+  const socketToPeerOptions = {
+    localPort: localPortUsedWithServer,
     port: peerAddress.port,
     host: peerAddress.host,
-  });
+  };
+
+  const socketToPeer = createConnection(socketToPeerOptions);
+  const tryToReconnect = limitExecutionCount(throttle(() => socketToPeer.connect(socketToPeerOptions), 1000), 600);
+
   socketToPeer.on('error', (e) => {
-    console.error(`Failed to connect with peer on ${networkType} network`);
-    console.error('Are you running the rendez-vous server on the same machine as this client by any chance? You should not. TODO: understand why.');
-    throw e;
+    console.log(e.message);
+    try {
+      tryToReconnect();
+    } catch (err) {
+      console.error(`Failed to connect with peer on ${networkType} network`);
+      console.error('Are you running the rendez-vous server on the same machine as this client by any chance? You should not. TODO: understand why.');
+      if (err instanceof Error) {
+        console.error(err.message);
+      } else {
+        console.error(err);
+      }
+      throw e;
+    }
   });
 
   socketToPeer.on('connect', () => {
@@ -40,6 +80,7 @@ const setupSocketToPeer = (socketToServer: Socket, peerAddress: Address, portToF
     console.log(`${networkType} socket info:`, socketToPeer.address());
     const socketToLocalPort = createConnection({ port: portToForward });
     socketToLocalPort.on('connect', () => {
+      console.log('forwarding port', portToForward, 'to peer');
       socketToLocalPort.pipe(socketToPeer);
       socketToPeer.pipe(socketToLocalPort);
     });
@@ -81,10 +122,14 @@ socketToServer.on('data', (data: string) => {
     console.log(`\tPrivately: ${peerPrivateAddress}`);
     console.log(`\tPublicly: ${peerPublicAddress}`);
 
-    // const socketToPrivatePeer = setupSocketToPeer(socketToServer, peerPrivateAddress, forwardPort, 'private');
-    const socketToPublicPeer = setupSocketToPeer(socketToServer, peerPublicAddress, forwardPort, 'public');
+    const localPortUsedWithServer = socketToServer.localPort;
+
+    socketToServer.on('end', () => {
+    // const socketToPrivatePeer = setupSocketToPeer(localPortUsedWithServer, peerPrivateAddress, forwardPort, 'private');
+      const socketToPublicPeer = setupSocketToPeer(localPortUsedWithServer, peerPublicAddress, forwardPort, 'public');
     // socketToPrivatePeer.on('connect', socketToPublicPeer.end);
     // socketToPublicPeer.on('connect', socketToPrivatePeer.end);
+    });
   }
 });
 
@@ -101,4 +146,8 @@ socketToServer.on('connect', () => {
 
 socketToServer.on('error', (e) => {
   throw e;
+});
+
+socketToServer.on('end', () => {
+  console.log('closing socket to server');
 });
