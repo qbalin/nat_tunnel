@@ -36,7 +36,7 @@ telnet localhost 2223
 
 ### Example: Exposing a service
 
-Imagine a service (like ssh) is running on client A on a port that you want to tunnel to client B. 
+Imagine a service (like ssh) is running on client A on a port that you want to tunnel to client B.
 
 Assuming a server is running, on client A run:
 ```bash
@@ -67,6 +67,13 @@ My setup was the following:
 - Another MacBook Pro running one client connected to the internet via another phone hotspot
 
 It is possible to have both clients live on the same network, but then there will be no NAT traversal of course.
+
+## Run code without installing it
+Server:
+
+```bash
+curl https://raw.githubusercontent.com/qbalin/nat_tunnel/builds/build/index.js | node - --port 9999
+```
 
 ## Installation
 
