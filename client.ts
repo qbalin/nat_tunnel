@@ -1,5 +1,5 @@
 import {
-  createConnection, createServer,
+  createConnection, createServer, NetConnectOpts,
 } from 'net';
 import Address from './address';
 
@@ -27,7 +27,7 @@ const serverPortString = process.argv[portKeyIndex + 1];
 if (!/^[0-9]+$/.test(serverPortString)) {
   throw new Error('Port must be a number from 1 to 65535.');
 }
-const timeoutString = timeoutKeyIndex !== 1 ? process.argv[timeoutKeyIndex + 1] : '60';
+const timeoutString = timeoutKeyIndex !== -1 ? process.argv[timeoutKeyIndex + 1] : '60';
 const serverPort = parseInt(serverPortString, 10);
 const forwardPortString = process.argv[forwardPortKeyIndex + 1];
 const forwardPort = parseInt(forwardPortString, 10);
@@ -75,6 +75,7 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
 
   // 5. try to connect to the peer in P2P!
   const socketToPeer = createConnection(socketToPeerOptions);
+  socketToPeer.setKeepAlive(true);
   const tryToReconnect = limitExecutionCount(throttle(() => socketToPeer.connect(socketToPeerOptions), 1000), timeout);
 
   socketToPeer.on('error', (e) => {
@@ -104,7 +105,7 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
     const socketToLocalPort = createConnection({ port: portToForward });
     socketToLocalPort.on('connect', () => {
       console.log('forwarding port', portToForward, 'to peer');
-      socketToLocalPort.pipe(socketToPeer);
+      socketToLocalPort.pipe(socketToPeer, { end: false });
       socketToPeer.pipe(socketToLocalPort);
     });
     socketToLocalPort.on('error', (e) => {
@@ -114,7 +115,7 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
         // will be sent over to the peer.
         console.log(`No server is running on port ${portToForward}, or the connection was refused. Starting one.`);
         createServer((c) => {
-          c.pipe(socketToPeer);
+          c.pipe(socketToPeer, { end: false });
           socketToPeer.pipe(c);
         }).listen(portToForward);
       } else {
