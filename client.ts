@@ -109,6 +109,8 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
       // after it has been closed
       socketToLocalPort.on('close', () => {
         console.log('socketToLocalPort closed. Reconnecting.');
+        socketToLocalPort.unpipe(socketToPeer);
+        socketToPeer.unpipe(socketToLocalPort);
         socketToLocalPort.connect(portToForward);
       });
     });
@@ -126,6 +128,11 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
         createServer((c) => {
           c.pipe(socketToPeer, { end: false });
           socketToPeer.pipe(c);
+
+          c.on('close', () => {
+            c.unpipe(socketToPeer);
+            socketToPeer.unpipe(c);
+          });
         }).listen(portToForward);
       } else {
         throw e;
