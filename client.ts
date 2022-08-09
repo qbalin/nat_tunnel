@@ -102,7 +102,16 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
 
     // 8. Trying to connect to a local service living on portToForward, like ssh on port 22,
     // and pipe the stream from that port to the peer.
-    const socketToLocalPort = createConnection({ port: portToForward });
+    const socketToLocalPort = createConnection(portToForward);
+    socketToLocalPort.once('connect', () => {
+      console.log('connected to local service', socketToLocalPort.localPort);
+      // If socketToLocalPort ever managed to connect to a local service, make sure it respawns
+      // after it has been closed
+      socketToLocalPort.on('close', () => {
+        console.log('socketToLocalPort closed. Reconnecting.');
+        socketToLocalPort.connect(portToForward);
+      });
+    });
     socketToLocalPort.on('connect', () => {
       console.log('forwarding port', portToForward, 'to peer');
       socketToLocalPort.pipe(socketToPeer, { end: false });
