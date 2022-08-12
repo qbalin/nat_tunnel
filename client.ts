@@ -1,6 +1,7 @@
 import {
-  createConnection, createServer, NetConnectOpts,
+  createConnection, createServer, Socket, TcpNetConnectOpts,
 } from 'net';
+import { randomUUID } from 'crypto';
 import Address from './address';
 
 /**
@@ -60,21 +61,139 @@ function throttle<T>(fn: (...args1: any[]) => T, delay: number) {
   });
 }
 
+function rjust(stringOrNumberToPad: string | number, targetLength: number, paddingString: string) {
+  const stringToPad = stringOrNumberToPad.toString();
+  if (stringToPad.length > targetLength) {
+    throw new Error(`String '${stringToPad}' is longer than desired padding (${targetLength}).`);
+  }
+  const padding = new Array(targetLength - stringToPad.length);
+  for (let i = 0; i < padding.length; i += 1) {
+    padding[i] = paddingString[i % paddingString.length];
+  }
+
+  return `${padding.join('')}${stringToPad}`;
+}
+
+type Node<T> = {
+  left: Node<T> | null
+  right: Node<T> | null
+  value: T
+}
+
+class Queue<T> {
+  private nodes: Node<T>[] = [];
+
+  private start: Node<T> | null = null;
+
+  private end: Node<T> | null = null;
+
+  push(value: T) {
+    const newNode: Node<T> = { left: null, right: null, value };
+    if (!this.end) {
+      this.start = newNode;
+      this.end = newNode;
+    } else {
+      newNode.left = this.end;
+      this.end.right = newNode;
+      this.end = newNode;
+    }
+  }
+
+  pop() {
+    if (!this.start) {
+      return null;
+    }
+    const { value } = this.start;
+    this.start = this.start.right;
+    return value;
+  }
+}
+
+class MultiplexAddon {
+  private socket: Socket;
+
+  private sending: boolean = false;
+
+  private messageQueue: Queue<Buffer> = new Queue();
+
+  private buffer: Buffer = Buffer.alloc(0);
+
+  private maxBufferSizeDigits: number = 14;
+
+  constructor(socket: Socket) {
+    this.socket = socket;
+
+    const emitMessagesFromBuffer = (buffer: Buffer, sock: Socket, maxBufferSizeDigits: number) : Buffer => {
+      if (buffer.length === 0) {
+        return buffer;
+      }
+      const lengthAsBuffer = buffer.subarray(0, maxBufferSizeDigits);
+      if (lengthAsBuffer.length !== maxBufferSizeDigits) {
+        console.error('Error while reading length', lengthAsBuffer.length, lengthAsBuffer, lengthAsBuffer.toString());
+        console.log(buffer.toString());
+        return buffer;
+      }
+      const length = parseInt(lengthAsBuffer.toString(), 10);
+
+      const message = buffer.subarray(maxBufferSizeDigits, length + maxBufferSizeDigits);
+      if (message.length === length) {
+        sock.emit('multiplex-data', message.subarray(0, 36).toString(), message.subarray(36));
+        return emitMessagesFromBuffer(buffer.subarray(maxBufferSizeDigits + length), sock, maxBufferSizeDigits);
+      }
+      return buffer;
+    };
+
+    socket.on('data', (data: Buffer) => {
+      this.buffer = Buffer.concat([this.buffer, data]);
+      this.buffer = emitMessagesFromBuffer(this.buffer, socket, this.maxBufferSizeDigits);
+    });
+  }
+
+  write(buffer?: Buffer) {
+    if (this.sending) {
+      if (buffer) {
+        console.log('is sending, queueing', buffer.toString());
+        this.messageQueue.push(buffer);
+      }
+    } else {
+      const message = buffer || this.messageQueue.pop();
+
+      if (message) {
+        this.sending = true;
+        const length = Buffer.from(rjust(message.length, this.maxBufferSizeDigits, '0'));
+        this.socket.write(Buffer.concat([length, message]), () => {
+          this.sending = false;
+          this.write();
+        });
+      }
+    }
+  }
+}
+
 /**
  * Interesting code starts here
  */
+const sockets : Record<string, Socket> = {};
 const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address, portToForward: number, networkType: 'public' | 'private') => {
   console.log(`\nAttempting ${networkType} connection towards ${peerAddress}`);
   console.log('localPortUsedWithServer', localPortUsedWithServer);
 
-  const socketToPeerOptions = {
+  const socketToPeerOptions : TcpNetConnectOpts = {
     localPort: localPortUsedWithServer,
     port: peerAddress.port,
     host: peerAddress.host,
   };
 
   // 5. try to connect to the peer in P2P!
-  const socketToPeer = createConnection(socketToPeerOptions);
+  const socketToPeer : Socket & { multiplex: MultiplexAddon } = (() => {
+    const socket = createConnection(socketToPeerOptions);
+    const multiplex = new MultiplexAddon(socket);
+
+    Reflect.set(socket, 'multiplex', multiplex);
+
+    return socket as Socket & { multiplex: MultiplexAddon };
+  })();
+
   socketToPeer.setKeepAlive(true);
   const tryToReconnect = limitExecutionCount(throttle(() => socketToPeer.connect(socketToPeerOptions), 1000), timeout);
 
@@ -96,50 +215,54 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
   });
 
   // 7. We're connected to the peer!
+  const messagesFor : Record<string, Array<Buffer>> = {};
   socketToPeer.on('connect', () => {
-    console.log(`Connected to ${networkType} peer!`);
-    console.log(`${networkType} socket info:`, socketToPeer.address());
+    console.log('connected to peer!');
+    socketToPeer.on('multiplex-data', (socketId: string, message: Buffer) => {
+      console.log('\nMessage from peer', message.length);
+      if (!sockets[socketId]) {
+        sockets[socketId] = createConnection(portToForward);
+        sockets[socketId].on('ready', () => {
+          if (messagesFor[socketId]) {
+            console.log('socketId', socketId, 'draining queued messages', messagesFor[socketId].map((e) => e.toString()));
+            messagesFor[socketId].forEach((m) => sockets[socketId].write(m));
+            delete messagesFor[socketId];
+          }
+        });
 
-    // 8. Trying to connect to a local service living on portToForward, like ssh on port 22,
-    // and pipe the stream from that port to the peer.
-    const socketToLocalPort = createConnection(portToForward);
-    socketToLocalPort.once('connect', () => {
-      console.log('connected to local service', socketToLocalPort.localPort);
-      // If socketToLocalPort ever managed to connect to a local service, make sure it respawns
-      // after it has been closed
-      socketToLocalPort.on('close', () => {
-        console.log('socketToLocalPort closed. Reconnecting.');
-        socketToLocalPort.unpipe(socketToPeer);
-        socketToPeer.unpipe(socketToLocalPort);
-        socketToLocalPort.connect(portToForward);
-      });
-    });
-    socketToLocalPort.on('connect', () => {
-      console.log('forwarding port', portToForward, 'to peer');
-      socketToLocalPort.pipe(socketToPeer, { end: false });
-      socketToPeer.pipe(socketToLocalPort);
-    });
-    socketToLocalPort.on('error', (e) => {
-      if (e.message.includes('ECONNREFUSED')) {
-        // 9. If no service was running on the portToForward, there is nothing to pipe to the peer,
-        // so let's create a local server. If anyone connects to this local server, the traffic
-        // will be sent over to the peer.
-        console.log(`No server is running on port ${portToForward}, or the connection was refused. Starting one.`);
-        createServer((c) => {
-          c.pipe(socketToPeer, { end: false });
-          socketToPeer.pipe(c);
+        sockets[socketId].on('data', (data: Buffer) => {
+          console.log('socketId', socketId, 'message to peer', data.length);
+          socketToPeer.multiplex.write(Buffer.concat([Buffer.from(socketId), data]));
+        });
+      }
 
-          c.on('close', () => {
-            c.unpipe(socketToPeer);
-            socketToPeer.unpipe(c);
-          });
-        }).listen(portToForward);
+      if (['writeOnly', 'open'].includes(sockets[socketId].readyState)) {
+        console.log('socketId', socketId, 'To local socket', message.length);
+        sockets[socketId].write(message);
       } else {
-        throw e;
+        messagesFor[socketId] ||= [];
+        messagesFor[socketId].push(message);
       }
     });
+
+    createServer((localSocketToServer) => {
+      const socketId = randomUUID();
+      sockets[socketId] = localSocketToServer;
+
+      localSocketToServer.on('data', (data: Buffer) => {
+        console.log('-- message to peer', data.length);
+        socketToPeer.multiplex.write(Buffer.concat([Buffer.from(socketId), data]));
+      });
+
+      localSocketToServer.on('close', () => {
+        delete sockets[socketId];
+      });
+    }).listen(portToForward)
+      .on('error', (e) => {
+        console.log(e);
+        console.log('Service alread running on port', portToForward);
+      });
   });
-  return socketToPeer;
 };
 
 // 1. Connect to the rendez-vous server
