@@ -170,10 +170,72 @@ class MultiplexAddon {
   }
 }
 
+type SocketWithMultiplex = Socket & { multiplex: MultiplexAddon };
+
+const withMultiplex = (socket: Socket) => {
+  const multiplex = new MultiplexAddon(socket);
+
+  Reflect.set(socket, 'multiplex', multiplex);
+
+  return socket as SocketWithMultiplex;
+};
+
 /**
  * Interesting code starts here
  */
+
 const sockets : Record<string, Socket> = {};
+
+const forwardPortThroughSocket = (socketToPeer: SocketWithMultiplex, portToForward: number) => {
+  const messagesFor : Record<string, Array<Buffer>> = {};
+
+  console.log('connected to peer!');
+  socketToPeer.on('multiplex-data', (socketId: string, message: Buffer) => {
+    console.log('\nMessage from peer', message.length);
+    if (!sockets[socketId]) {
+      sockets[socketId] = createConnection(portToForward);
+      sockets[socketId].on('ready', () => {
+        if (messagesFor[socketId]) {
+          console.log('socketId', socketId, 'draining queued messages', messagesFor[socketId].map((e) => e.toString()));
+          messagesFor[socketId].forEach((m) => sockets[socketId].write(m));
+          delete messagesFor[socketId];
+        }
+      });
+
+      sockets[socketId].on('data', (data: Buffer) => {
+        console.log('socketId', socketId, 'message to peer', data.length);
+        socketToPeer.multiplex.write(Buffer.concat([Buffer.from(socketId), data]));
+      });
+    }
+
+    if (['writeOnly', 'open'].includes(sockets[socketId].readyState)) {
+      console.log('socketId', socketId, 'To local socket', message.length);
+      sockets[socketId].write(message);
+    } else {
+      messagesFor[socketId] ||= [];
+      messagesFor[socketId].push(message);
+    }
+  });
+
+  createServer((localSocketToServer) => {
+    const socketId = randomUUID();
+    sockets[socketId] = localSocketToServer;
+
+    localSocketToServer.on('data', (data: Buffer) => {
+      console.log('-- message to peer', data.length);
+      socketToPeer.multiplex.write(Buffer.concat([Buffer.from(socketId), data]));
+    });
+
+    localSocketToServer.on('close', () => {
+      delete sockets[socketId];
+    });
+  }).listen(portToForward)
+    .on('error', (e) => {
+      console.log(e);
+      console.log('Service alread running on port', portToForward);
+    });
+};
+
 const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address, portToForward: number, networkType: 'public' | 'private') => {
   console.log(`\nAttempting ${networkType} connection towards ${peerAddress}`);
   console.log('localPortUsedWithServer', localPortUsedWithServer);
@@ -185,14 +247,7 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
   };
 
   // 5. try to connect to the peer in P2P!
-  const socketToPeer : Socket & { multiplex: MultiplexAddon } = (() => {
-    const socket = createConnection(socketToPeerOptions);
-    const multiplex = new MultiplexAddon(socket);
-
-    Reflect.set(socket, 'multiplex', multiplex);
-
-    return socket as Socket & { multiplex: MultiplexAddon };
-  })();
+  const socketToPeer = withMultiplex(createConnection(socketToPeerOptions));
 
   socketToPeer.setKeepAlive(true);
   const tryToReconnect = limitExecutionCount(throttle(() => socketToPeer.connect(socketToPeerOptions), 1000), timeout);
@@ -204,59 +259,17 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
       tryToReconnect();
     } catch (err) {
       console.error(`Failed to connect with peer on ${networkType} network`);
-      throw e;
+      console.error(e);
+      socketToPeer.emit('failedToConnectToPeer');
     }
   });
 
   // 7. We're connected to the peer!
-  const messagesFor : Record<string, Array<Buffer>> = {};
   socketToPeer.on('connect', () => {
-    console.log('connected to peer!');
-    socketToPeer.on('multiplex-data', (socketId: string, message: Buffer) => {
-      console.log('\nMessage from peer', message.length);
-      if (!sockets[socketId]) {
-        sockets[socketId] = createConnection(portToForward);
-        sockets[socketId].on('ready', () => {
-          if (messagesFor[socketId]) {
-            console.log('socketId', socketId, 'draining queued messages', messagesFor[socketId].map((e) => e.toString()));
-            messagesFor[socketId].forEach((m) => sockets[socketId].write(m));
-            delete messagesFor[socketId];
-          }
-        });
-
-        sockets[socketId].on('data', (data: Buffer) => {
-          console.log('socketId', socketId, 'message to peer', data.length);
-          socketToPeer.multiplex.write(Buffer.concat([Buffer.from(socketId), data]));
-        });
-      }
-
-      if (['writeOnly', 'open'].includes(sockets[socketId].readyState)) {
-        console.log('socketId', socketId, 'To local socket', message.length);
-        sockets[socketId].write(message);
-      } else {
-        messagesFor[socketId] ||= [];
-        messagesFor[socketId].push(message);
-      }
-    });
-
-    createServer((localSocketToServer) => {
-      const socketId = randomUUID();
-      sockets[socketId] = localSocketToServer;
-
-      localSocketToServer.on('data', (data: Buffer) => {
-        console.log('-- message to peer', data.length);
-        socketToPeer.multiplex.write(Buffer.concat([Buffer.from(socketId), data]));
-      });
-
-      localSocketToServer.on('close', () => {
-        delete sockets[socketId];
-      });
-    }).listen(portToForward)
-      .on('error', (e) => {
-        console.log(e);
-        console.log('Service alread running on port', portToForward);
-      });
+    forwardPortThroughSocket(socketToPeer, portToForward);
   });
+
+  return socketToPeer;
 };
 
 // 1. Connect to the rendez-vous server
@@ -294,9 +307,38 @@ socketToServer.on('data', (data: string) => {
     socketToServer.on('end', () => {
     // const socketToPrivatePeer = setupSocketToPeer(localPortUsedWithServer, peerPrivateAddress, forwardPort, 'private');
       const socketToPublicPeer = setupSocketToPeer(localPortUsedWithServer, peerPublicAddress, forwardPort, 'public');
-    // socketToPrivatePeer.on('connect', socketToPublicPeer.end);
-    // socketToPublicPeer.on('connect', socketToPrivatePeer.end);
+
+      // socketToPrivatePeer.on('connect', socketToPublicPeer.end);
+      // socketToPublicPeer.on('connect', socketToPrivatePeer.end);
+      // const privateConnectionFailed = new Promise((resolve) => { socketToPrivatePeer.on('failedToConnectToPeer', resolve); });
+      const publicConnectionFailed = new Promise((resolve) => { socketToPublicPeer.on('failedToConnectToPeer', resolve); });
+      // const connectionFailures = [privateConnectionFailed, publicConnectionFailed]
+
+      const connectionsFailed = [publicConnectionFailed];
+      Promise.all(connectionsFailed).then(() => {
+        console.log('Attempts to connect in P2P failed. Will try via relay.');
+
+        socketToServer.removeAllListeners('connect');
+
+        socketToServer.on('connect', () => {
+          console.log('Connected to relay server.');
+          socketToServer.write(JSON.stringify(
+            {
+              command: 'register',
+              relay: true,
+              localPort: socketToServer.localPort,
+              localAddress: socketToServer.localAddress,
+            },
+          ));
+        });
+
+        socketToServer.connect({ port: serverPort, host: serverHost });
+      });
     });
+  } else if (parsedData?.command === 'initiateRelayedCommunication') {
+    socketToServer.removeAllListeners('data');
+    const socketToPeerViaRelay = withMultiplex(socketToServer);
+    forwardPortThroughSocket(socketToPeerViaRelay, forwardPort);
   }
 });
 
@@ -308,6 +350,7 @@ socketToServer.on('connect', () => {
   socketToServer.write(JSON.stringify(
     {
       command: 'register',
+      relay: false,
       localPort: socketToServer.localPort,
       localAddress: socketToServer.localAddress,
     },

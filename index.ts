@@ -95,7 +95,7 @@ const clientPair = new ClientPair();
 
 const server = createServer((c) => {
   // Optional - useful when logging data
-  c.setEncoding('utf8');
+  // c.setEncoding('utf8');
 
   c.on('end', () => {
     if (c.remoteAddress && c.remotePort) {
@@ -105,13 +105,12 @@ const server = createServer((c) => {
     }
   });
 
-  c.on('data', (data: string) => {
+  c.on('data', (data: Buffer) => {
     let parsedData: any;
     try {
-      parsedData = JSON.parse(data);
+      parsedData = JSON.parse(data.toString());
     } catch (e) {
-      console.log('data', data);
-      throw e;
+      parsedData = {};
     }
 
     if (parsedData.command === 'register') {
@@ -126,34 +125,59 @@ const server = createServer((c) => {
       }
 
       if (clientPair.complete) {
-        console.log('\nClient pair is full, broadcasting \'tryConnectToPeer\' command');
-        console.log(`- PRIVATELY\t(A) ${clientPair.clientAOriginDescriptor?.private} <=> (B) ${clientPair.clientBOriginDescriptor?.private}`);
-        console.log(`- PUBLICLY\t(A) ${clientPair.clientAOriginDescriptor?.public} <=> (B) ${clientPair.clientBOriginDescriptor?.public}`);
+        if (parsedData.relay) {
+          console.log('\nClient pair is full, broadcasting \'initiateRelayedCommunication\' command');
+          clientPair.clientAOriginDescriptor?.socket.write(
+            JSON.stringify({
+              command: 'initiateRelayedCommunication',
+              name: 'A',
+              peerName: 'B',
+            }),
+          );
 
-        clientPair.clientAOriginDescriptor?.socket.write(
-          JSON.stringify({
-            command: 'tryConnectToPeer',
-            name: 'A',
-            peerName: 'B',
-            public: clientPair.clientBOriginDescriptor?.public,
-            private: clientPair.clientBOriginDescriptor?.private,
-          }),
-        );
+          clientPair.clientBOriginDescriptor?.socket.write(
+            JSON.stringify({
+              command: 'initiateRelayedCommunication',
+              name: 'B',
+              peerName: 'A',
+            }),
+          );
 
-        clientPair.clientBOriginDescriptor?.socket.write(
-          JSON.stringify({
-            command: 'tryConnectToPeer',
-            name: 'B',
-            peerName: 'A',
-            public: clientPair.clientAOriginDescriptor?.public,
-            private: clientPair.clientAOriginDescriptor?.private,
-          }),
-        );
+          clientPair.clientBOriginDescriptor?.socket.removeAllListeners('data');
+          clientPair.clientAOriginDescriptor?.socket.removeAllListeners('data');
 
-        // The server must indicate the end of the communication for the client to be able to re-use
-        // the same outbound port in the future communication with the other peer.
-        // This requirement is OS dependant: on MacOS, it is not necessary. On Raspbian, it is.
-        clientPair.clear();
+          clientPair.clientAOriginDescriptor?.socket.pipe(clientPair.clientBOriginDescriptor?.socket);
+          clientPair.clientBOriginDescriptor?.socket.pipe(clientPair.clientAOriginDescriptor?.socket);
+        } else {
+          console.log('\nClient pair is full, broadcasting \'tryConnectToPeer\' command');
+          console.log(`- PRIVATELY\t(A) ${clientPair.clientAOriginDescriptor?.private} <=> (B) ${clientPair.clientBOriginDescriptor?.private}`);
+          console.log(`- PUBLICLY\t(A) ${clientPair.clientAOriginDescriptor?.public} <=> (B) ${clientPair.clientBOriginDescriptor?.public}`);
+
+          clientPair.clientAOriginDescriptor?.socket.write(
+            JSON.stringify({
+              command: 'tryConnectToPeer',
+              name: 'A',
+              peerName: 'B',
+              public: clientPair.clientBOriginDescriptor?.public,
+              private: clientPair.clientBOriginDescriptor?.private,
+            }),
+          );
+
+          clientPair.clientBOriginDescriptor?.socket.write(
+            JSON.stringify({
+              command: 'tryConnectToPeer',
+              name: 'B',
+              peerName: 'A',
+              public: clientPair.clientAOriginDescriptor?.public,
+              private: clientPair.clientAOriginDescriptor?.private,
+            }),
+          );
+
+          // The server must indicate the end of the communication for the client to be able to re-use
+          // the same outbound port in the future communication with the other peer.
+          // This requirement is OS dependant: on MacOS, it is not necessary. On Raspbian, it is.
+          clientPair.clear();
+        }
       }
     }
   });
