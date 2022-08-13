@@ -19,6 +19,7 @@
   "scripts": {
     "dev": "npx tsc -w",
     "lint": "yarn eslint .",
-    "start": "node ./build/index.js"
+    "build": "yarn install; npx tsc",
+    "start": "node ./build/index.js -p 9999"
   }
 }
