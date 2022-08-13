@@ -1,7 +1,7 @@
 {
   "name": "hole_punching",
   "version": "1.0.0",
-  "main": "./build/index.js",
+  "main": "index.js",
   "author": "Quentin Balin",
   "license": "MIT",
   "devDependencies": {
@@ -20,6 +20,6 @@
     "dev": "npx tsc -w",
     "lint": "yarn eslint .",
     "build": "yarn install; npx tsc",
-    "start": "node ./build/index.js -p 9999"
+    "start": "node index.js -p 9999"
   }
 }
