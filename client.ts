@@ -204,12 +204,6 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
       tryToReconnect();
     } catch (err) {
       console.error(`Failed to connect with peer on ${networkType} network`);
-      console.error('Are you running the rendez-vous server on the same machine as this client by any chance? You should not. TODO: understand why.');
-      if (err instanceof Error) {
-        console.error(err.message);
-      } else {
-        console.error(err);
-      }
       throw e;
     }
   });
