@@ -1,0 +1,1 @@
+web: node ./build/index.js -p 9999
