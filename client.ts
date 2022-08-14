@@ -76,8 +76,7 @@ function rjust(stringOrNumberToPad: string | number, targetLength: number, paddi
 }
 
 type Node<T> = {
-  left: Node<T> | null
-  right: Node<T> | null
+  next: Node<T> | null
   value: T
 }
 
@@ -87,13 +86,12 @@ class Queue<T> {
   private end: Node<T> | null = null;
 
   push(value: T) {
-    const newNode: Node<T> = { left: null, right: null, value };
+    const newNode: Node<T> = { next: null, value };
     if (!this.end) {
       this.start = newNode;
       this.end = newNode;
     } else {
-      newNode.left = this.end;
-      this.end.right = newNode;
+      this.end.next = newNode;
       this.end = newNode;
     }
   }
@@ -103,7 +101,12 @@ class Queue<T> {
       return null;
     }
     const { value } = this.start;
-    this.start = this.start.right;
+    if (this.start.next) {
+      this.start = this.start.next;
+    } else {
+      this.start = null;
+      this.end = null;
+    }
     return value;
   }
 }
