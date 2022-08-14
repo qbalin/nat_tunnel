@@ -185,44 +185,44 @@ const forwardPortThroughSocket = (socketToPeer: MultiplexSocket, portToForward: 
   const messagesFor : Record<string, Array<Buffer>> = {};
 
   console.log('connected to peer!');
-  socketToPeer.on('multiplex-data', (socketId: string, message: Buffer) => {
+  socketToPeer.on('multiplex-data', (channelId: string, message: Buffer) => {
     console.log('\nMessage from peer', message.length);
-    if (!sockets[socketId]) {
-      sockets[socketId] = createConnection(portToForward);
-      sockets[socketId].on('ready', () => {
-        if (messagesFor[socketId]) {
-          console.log('socketId', socketId, 'draining queued messages', messagesFor[socketId].map((e) => e.toString()));
-          messagesFor[socketId].forEach((m) => sockets[socketId].write(m));
-          delete messagesFor[socketId];
+    if (!sockets[channelId]) {
+      sockets[channelId] = createConnection(portToForward);
+      sockets[channelId].on('ready', () => {
+        if (messagesFor[channelId]) {
+          console.log('channelId', channelId, 'draining queued messages', messagesFor[channelId].map((e) => e.toString()));
+          messagesFor[channelId].forEach((m) => sockets[channelId].write(m));
+          delete messagesFor[channelId];
         }
       });
 
-      sockets[socketId].on('data', (data: Buffer) => {
-        console.log('socketId', socketId, 'message to peer', data.length);
-        socketToPeer.multiplexWrite(socketId, data);
+      sockets[channelId].on('data', (data: Buffer) => {
+        console.log('channelId', channelId, 'message to peer', data.length);
+        socketToPeer.multiplexWrite(channelId, data);
       });
     }
 
-    if (['writeOnly', 'open'].includes(sockets[socketId].readyState)) {
-      console.log('socketId', socketId, 'To local socket', message.length);
-      sockets[socketId].write(message);
+    if (['writeOnly', 'open'].includes(sockets[channelId].readyState)) {
+      console.log('channelId', channelId, 'To local socket', message.length);
+      sockets[channelId].write(message);
     } else {
-      messagesFor[socketId] ||= [];
-      messagesFor[socketId].push(message);
+      messagesFor[channelId] ||= [];
+      messagesFor[channelId].push(message);
     }
   });
 
   createServer((localSocketToServer) => {
-    const socketId = randomUUID();
-    sockets[socketId] = localSocketToServer;
+    const channelId = randomUUID();
+    sockets[channelId] = localSocketToServer;
 
     localSocketToServer.on('data', (data: Buffer) => {
       console.log('-- message to peer', data.length);
-      socketToPeer.multiplexWrite(socketId, data);
+      socketToPeer.multiplexWrite(channelId, data);
     });
 
     localSocketToServer.on('close', () => {
-      delete sockets[socketId];
+      delete sockets[channelId];
     });
   }).listen(portToForward)
     .on('error', (e) => {
