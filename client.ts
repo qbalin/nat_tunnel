@@ -2,6 +2,7 @@ import {
   createConnection, createServer, Socket, SocketConstructorOpts, TcpNetConnectOpts,
 } from 'net';
 import { randomUUID } from 'crypto';
+import EventEmitter from 'events';
 import Address from './address';
 
 /**
@@ -179,6 +180,7 @@ class MultiplexSocket extends Socket {
  * Interesting code starts here
  */
 
+const eventEmitter = new EventEmitter();
 const sockets : Record<string, Socket> = {};
 
 const forwardPortThroughSocket = (socketToPeer: MultiplexSocket, portToForward: number) => {
@@ -231,13 +233,13 @@ const forwardPortThroughSocket = (socketToPeer: MultiplexSocket, portToForward: 
     });
 };
 
-const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address, portToForward: number, networkType: 'public' | 'private') => {
+const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address, portToForward: number, networkType: 'public' | 'private') : Promise<MultiplexSocket> => new Promise((resolve, reject) => {
   console.log(`\nAttempting ${networkType} connection towards ${peerAddress}`);
   console.log('localPortUsedWithServer', localPortUsedWithServer);
 
   const socketToPeerOptions : TcpNetConnectOpts = {
     localPort: localPortUsedWithServer,
-    port: 0, // peerAddress.port,
+    port: peerAddress.port,
     host: peerAddress.host,
   };
 
@@ -256,17 +258,17 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
     } catch (err) {
       console.error(`Failed to connect with peer on ${networkType} network`);
       console.error(e);
-      socketToPeer.emit('failedToConnectToPeer');
+      socketToPeer.removeAllListeners();
+      socketToPeer.destroy();
+      reject(e);
     }
   });
 
   // 7. We're connected to the peer!
   socketToPeer.on('connect', () => {
-    forwardPortThroughSocket(socketToPeer, portToForward);
+    resolve(socketToPeer);
   });
-
-  return socketToPeer;
-};
+});
 
 // 1. Connect to the rendez-vous server
 const socketToServer = new MultiplexSocket();
@@ -302,18 +304,17 @@ const handleDataFromServer = (data: string) => {
     // with the same outbound port: some OS (like Raspbian) would not allow to reuse the outbound
     // port in a connection to the peer if that port were used in a connection to the server.
     // It is important that the server be the one to end the connection to really free the port.
-    socketToServer.on('end', () => {
+    socketToServer.on('end', async () => {
     // const socketToPrivatePeer = setupSocketToPeer(localPortUsedWithServer, peerPrivateAddress, forwardPort, 'private');
       const socketToPublicPeer = setupSocketToPeer(localPortUsedWithServer, peerPublicAddress, forwardPort, 'public');
 
       // socketToPrivatePeer.on('connect', socketToPublicPeer.end);
       // socketToPublicPeer.on('connect', socketToPrivatePeer.end);
-      // const privateConnectionFailed = new Promise((resolve) => { socketToPrivatePeer.on('failedToConnectToPeer', resolve); });
-      const publicConnectionFailed = new Promise((resolve) => { socketToPublicPeer.on('failedToConnectToPeer', resolve); });
-      // const connectionFailures = [privateConnectionFailed, publicConnectionFailed]
 
-      const connectionsFailed = [publicConnectionFailed];
-      Promise.all(connectionsFailed).then(() => {
+      try {
+        const socketToPeer = await Promise.any([socketToPublicPeer]);
+        eventEmitter.emit('socketReadyForPortForwarding', socketToPeer);
+      } catch (e) {
         console.log('Attempts to connect in P2P failed. Will try via relay.');
 
         socketToServer.removeAllListeners('connect');
@@ -331,17 +332,20 @@ const handleDataFromServer = (data: string) => {
         });
 
         socketToServer.connect({ port: serverPort, host: serverHost });
-      });
+      }
     });
   } else if (parsedData?.command === 'initiateRelayedCommunication') {
-    const socketToPeerViaRelay = socketToServer;
-    socketToPeerViaRelay.flush();
-    socketToPeerViaRelay.removeListener('data', handleDataFromServer);
-    forwardPortThroughSocket(socketToPeerViaRelay, forwardPort);
+    socketToServer.flush();
+    socketToServer.removeListener('data', handleDataFromServer);
+    eventEmitter.emit('socketReadyForPortForwarding', socketToServer);
   }
 };
 
 socketToServer.on('data', handleDataFromServer);
+
+eventEmitter.on('socketReadyForPortForwarding', (socketToPeer: MultiplexSocket) => {
+  forwardPortThroughSocket(socketToPeer, forwardPort);
+});
 
 // 2. When connecte to rendez-vous server, send information about the
 // local port and address being used. These coordinates will be used
