@@ -340,6 +340,7 @@ const handleDataFromServer = (data: string) => {
         Promise.allSettled([socketToPrivatePeer, socketToPublicPeer]).then((results) => {
           results.forEach((r) => {
             if (r.status === 'fulfilled' && r.value !== socketToPeer) {
+              console.log('Both public and private network connections could be established. Discarding the last one established.');
               r.value.removeAllListeners();
               r.value.destroy();
             } else if (r.status === 'rejected') {
