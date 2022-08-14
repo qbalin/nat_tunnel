@@ -1,5 +1,5 @@
 import {
-  createConnection, createServer, Socket, TcpNetConnectOpts,
+  createConnection, createServer, Socket, SocketConstructorOpts, TcpNetConnectOpts,
 } from 'net';
 import { randomUUID } from 'crypto';
 import Address from './address';
@@ -109,9 +109,7 @@ class Queue<T> {
   }
 }
 
-class MultiplexAddon {
-  private socket: Socket;
-
+class MultiplexSocket extends Socket {
   private sending: boolean = false;
 
   private messageQueue: Queue<Buffer> = new Queue();
@@ -120,65 +118,62 @@ class MultiplexAddon {
 
   private maxBufferSizeDigits: number = 14;
 
-  constructor(socket: Socket) {
-    this.socket = socket;
+  constructor(...args: SocketConstructorOpts[]) {
+    super(...args);
 
-    const emitMessagesFromBuffer = (buffer: Buffer, sock: Socket, maxBufferSizeDigits: number) : Buffer => {
-      if (buffer.length === 0) {
-        return buffer;
-      }
-      const lengthAsBuffer = buffer.subarray(0, maxBufferSizeDigits);
-      if (lengthAsBuffer.length !== maxBufferSizeDigits) {
-        console.error('Error while reading length', lengthAsBuffer.length, lengthAsBuffer, lengthAsBuffer.toString());
-        console.log(buffer.toString());
-        return buffer;
-      }
-      const length = parseInt(lengthAsBuffer.toString(), 10);
-
-      const message = buffer.subarray(maxBufferSizeDigits, length + maxBufferSizeDigits);
-      if (message.length === length) {
-        sock.emit('multiplex-data', message.subarray(0, 36).toString(), message.subarray(36));
-        return emitMessagesFromBuffer(buffer.subarray(maxBufferSizeDigits + length), sock, maxBufferSizeDigits);
-      }
-      return buffer;
-    };
-
-    socket.on('data', (data: Buffer) => {
+    this.on('data', (data: Buffer) => {
       this.buffer = Buffer.concat([this.buffer, data]);
-      this.buffer = emitMessagesFromBuffer(this.buffer, socket, this.maxBufferSizeDigits);
+      this.buffer = this.emitMessagesFromBuffer(this.buffer, this.maxBufferSizeDigits);
     });
   }
 
-  write(buffer?: Buffer) {
+  private emitMessagesFromBuffer(buffer: Buffer, maxBufferSizeDigits: number) : Buffer {
+    if (buffer.length === 0) {
+      return buffer;
+    }
+    const lengthAsBuffer = buffer.subarray(0, maxBufferSizeDigits);
+    if (lengthAsBuffer.length !== maxBufferSizeDigits) {
+      console.error('Error while reading length', lengthAsBuffer.length, lengthAsBuffer, lengthAsBuffer.toString());
+      console.log(buffer.toString());
+      return buffer;
+    }
+    const length = parseInt(lengthAsBuffer.toString(), 10);
+
+    const message = buffer.subarray(maxBufferSizeDigits, length + maxBufferSizeDigits);
+    if (message.length === length) {
+      this.emit('multiplex-data', message.subarray(0, 36).toString(), message.subarray(36));
+      return this.emitMessagesFromBuffer(buffer.subarray(maxBufferSizeDigits + length), this.maxBufferSizeDigits);
+    }
+    return buffer;
+  }
+
+  multiplexWrite(channelId?: string, buffer?: Buffer) {
+    const channelIdAndData = channelId && buffer && Buffer.concat([Buffer.from(channelId), buffer]);
     if (this.sending) {
-      if (buffer) {
+      if (channelIdAndData) {
         console.log('is sending, queueing', buffer.toString());
-        this.messageQueue.push(buffer);
+        this.messageQueue.push(channelIdAndData);
       }
     } else {
-      const message = buffer || this.messageQueue.pop();
+      const message = channelIdAndData || this.messageQueue.pop();
 
       if (message) {
         this.sending = true;
         const length = Buffer.from(rjust(message.length, this.maxBufferSizeDigits, '0'));
-        this.socket.write(Buffer.concat([length, message]), () => {
+        console.log('sending', message.length - 36);
+        this.write(Buffer.concat([length, message]), () => {
           this.sending = false;
-          this.write();
+          this.multiplexWrite();
         });
       }
     }
   }
+
+  flush() {
+    this.buffer = Buffer.alloc(0);
+    this.messageQueue = new Queue();
+  }
 }
-
-type SocketWithMultiplex = Socket & { multiplex: MultiplexAddon };
-
-const withMultiplex = (socket: Socket) => {
-  const multiplex = new MultiplexAddon(socket);
-
-  Reflect.set(socket, 'multiplex', multiplex);
-
-  return socket as SocketWithMultiplex;
-};
 
 /**
  * Interesting code starts here
@@ -186,7 +181,7 @@ const withMultiplex = (socket: Socket) => {
 
 const sockets : Record<string, Socket> = {};
 
-const forwardPortThroughSocket = (socketToPeer: SocketWithMultiplex, portToForward: number) => {
+const forwardPortThroughSocket = (socketToPeer: MultiplexSocket, portToForward: number) => {
   const messagesFor : Record<string, Array<Buffer>> = {};
 
   console.log('connected to peer!');
@@ -204,7 +199,7 @@ const forwardPortThroughSocket = (socketToPeer: SocketWithMultiplex, portToForwa
 
       sockets[socketId].on('data', (data: Buffer) => {
         console.log('socketId', socketId, 'message to peer', data.length);
-        socketToPeer.multiplex.write(Buffer.concat([Buffer.from(socketId), data]));
+        socketToPeer.multiplexWrite(socketId, data);
       });
     }
 
@@ -223,7 +218,7 @@ const forwardPortThroughSocket = (socketToPeer: SocketWithMultiplex, portToForwa
 
     localSocketToServer.on('data', (data: Buffer) => {
       console.log('-- message to peer', data.length);
-      socketToPeer.multiplex.write(Buffer.concat([Buffer.from(socketId), data]));
+      socketToPeer.multiplexWrite(socketId, data);
     });
 
     localSocketToServer.on('close', () => {
@@ -242,12 +237,13 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
 
   const socketToPeerOptions : TcpNetConnectOpts = {
     localPort: localPortUsedWithServer,
-    port: peerAddress.port,
+    port: 0, // peerAddress.port,
     host: peerAddress.host,
   };
 
   // 5. try to connect to the peer in P2P!
-  const socketToPeer = withMultiplex(createConnection(socketToPeerOptions));
+  const socketToPeer = new MultiplexSocket();
+  socketToPeer.connect(socketToPeerOptions);
 
   socketToPeer.setKeepAlive(true);
   const tryToReconnect = limitExecutionCount(throttle(() => socketToPeer.connect(socketToPeerOptions), 1000), timeout);
@@ -273,11 +269,13 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
 };
 
 // 1. Connect to the rendez-vous server
-const socketToServer = createConnection({
+const socketToServer = new MultiplexSocket();
+socketToServer.connect({
   port: serverPort,
   host: serverHost,
 });
-socketToServer.on('data', (data: string) => {
+
+const handleDataFromServer = (data: string) => {
   console.log('data', data);
   let parsedData: any = null;
   try {
@@ -336,11 +334,14 @@ socketToServer.on('data', (data: string) => {
       });
     });
   } else if (parsedData?.command === 'initiateRelayedCommunication') {
-    socketToServer.removeAllListeners('data');
-    const socketToPeerViaRelay = withMultiplex(socketToServer);
+    const socketToPeerViaRelay = socketToServer;
+    socketToPeerViaRelay.flush();
+    socketToPeerViaRelay.removeListener('data', handleDataFromServer);
     forwardPortThroughSocket(socketToPeerViaRelay, forwardPort);
   }
-});
+};
+
+socketToServer.on('data', handleDataFromServer);
 
 // 2. When connecte to rendez-vous server, send information about the
 // local port and address being used. These coordinates will be used
