@@ -234,7 +234,7 @@ const forwardPortThroughSocket = (socketToPeer: MultiplexSocket, portToForward: 
     });
 };
 
-const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address, portToForward: number, networkType: 'public' | 'private') : Promise<MultiplexSocket> => new Promise((resolve, reject) => {
+const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address, portToForward: number, networkType: 'public' | 'private', ownAbortController: AbortController, otherAbortController: AbortController) : Promise<MultiplexSocket> => new Promise((resolve, reject) => {
   console.log(`\nAttempting ${networkType} connection towards ${peerAddress}`);
   console.log('localPortUsedWithServer', localPortUsedWithServer);
 
@@ -254,8 +254,12 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
   socketToPeer.on('error', (e) => {
     console.log(e.message);
     try {
-      // 6. There is a chance that the connection to the peer will fail. Retry.
-      tryToReconnect();
+      // 6. There is a chance that the connection to the peer will fail. Retry, unless a connection is already successful.
+      if (ownAbortController.signal.aborted) {
+        reject(new Error(`Connection on ${networkType === 'private' ? 'public' : 'private'} network succeded, giving up ${networkType} connection attempt`));
+      } else {
+        tryToReconnect();
+      }
     } catch (err) {
       console.error(`Failed to connect with peer on ${networkType} network`);
       console.error(e);
@@ -267,6 +271,9 @@ const setupSocketToPeer = (localPortUsedWithServer: number, peerAddress: Address
 
   // 7. We're connected to the peer!
   socketToPeer.on('connect', () => {
+    if (!ownAbortController.signal.aborted) {
+      otherAbortController.abort();
+    }
     resolve(socketToPeer);
   });
 });
@@ -319,14 +326,27 @@ const handleDataFromServer = (data: string) => {
     // port in a connection to the peer if that port were used in a connection to the server.
     // It is important that the server be the one to end the connection to really free the port.
     socketToServer.on('end', async () => {
-    // const socketToPrivatePeer = setupSocketToPeer(localPortUsedWithServer, peerPrivateAddress, forwardPort, 'private');
-      const socketToPublicPeer = setupSocketToPeer(localPortUsedWithServer, peerPublicAddress, forwardPort, 'public');
-
-      // socketToPrivatePeer.on('connect', socketToPublicPeer.end);
-      // socketToPublicPeer.on('connect', socketToPrivatePeer.end);
+      const abortController1 = new AbortController();
+      const abortController2 = new AbortController();
+      const socketToPrivatePeer = setupSocketToPeer(localPortUsedWithServer, peerPrivateAddress, forwardPort, 'private', abortController1, abortController2);
+      const socketToPublicPeer = setupSocketToPeer(localPortUsedWithServer, peerPublicAddress, forwardPort, 'public', abortController2, abortController1);
 
       try {
-        const socketToPeer = await Promise.any([socketToPublicPeer]);
+        // Promise.any will return the first socket that managed to connect.
+        // The private and public can both succeed only if both peers are on the same network and the router allows hairpin connections. Rare.
+        const socketToPeer = await Promise.any([socketToPrivatePeer, socketToPublicPeer]);
+
+        // In case both have succeeded, discard the one that succeeded last
+        Promise.allSettled([socketToPrivatePeer, socketToPublicPeer]).then((results) => {
+          results.forEach((r) => {
+            if (r.status === 'fulfilled' && r.value !== socketToPeer) {
+              r.value.removeAllListeners();
+              r.value.destroy();
+            } else if (r.status === 'rejected') {
+              console.log(r.reason.message);
+            }
+          });
+        });
         eventEmitter.emit('socketReadyForPortForwarding', socketToPeer);
       } catch (e) {
         console.log('Attempts to connect in P2P failed. Will try via relay.');
