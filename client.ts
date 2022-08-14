@@ -82,8 +82,6 @@ type Node<T> = {
 }
 
 class Queue<T> {
-  private nodes: Node<T>[] = [];
-
   private start: Node<T> | null = null;
 
   private end: Node<T> | null = null;
