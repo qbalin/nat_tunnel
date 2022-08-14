@@ -276,6 +276,19 @@ const socketToServer = new MultiplexSocket();
 socketToServer.connect({
   port: serverPort,
   host: serverHost,
+}, () => {
+  // 2. When connecte to rendez-vous server, send information about the
+  // local port and address being used. These coordinates will be used
+  // to connect on a private network, if the other peer happens to live on it.
+  console.log('Connected to the server from', socketToServer.address());
+  socketToServer.write(JSON.stringify(
+    {
+      command: 'register',
+      relay: false,
+      localPort: socketToServer.localPort,
+      localAddress: socketToServer.localAddress,
+    },
+  ));
 });
 
 const handleDataFromServer = (data: string) => {
@@ -317,10 +330,7 @@ const handleDataFromServer = (data: string) => {
         eventEmitter.emit('socketReadyForPortForwarding', socketToPeer);
       } catch (e) {
         console.log('Attempts to connect in P2P failed. Will try via relay.');
-
-        socketToServer.removeAllListeners('connect');
-
-        socketToServer.on('connect', () => {
+        socketToServer.connect({ port: serverPort, host: serverHost }, () => {
           console.log('Connected to relay server.');
           socketToServer.write(JSON.stringify(
             {
@@ -331,8 +341,6 @@ const handleDataFromServer = (data: string) => {
             },
           ));
         });
-
-        socketToServer.connect({ port: serverPort, host: serverHost });
       }
     });
   } else if (parsedData?.command === 'initiateRelayedCommunication') {
@@ -346,21 +354,6 @@ socketToServer.on('data', handleDataFromServer);
 
 eventEmitter.on('socketReadyForPortForwarding', (socketToPeer: MultiplexSocket) => {
   forwardPortThroughSocket(socketToPeer, forwardPort);
-});
-
-// 2. When connecte to rendez-vous server, send information about the
-// local port and address being used. These coordinates will be used
-// to connect on a private network, if the other peer happens to live on it.
-socketToServer.on('connect', () => {
-  console.log('Connected to the server from', socketToServer.address());
-  socketToServer.write(JSON.stringify(
-    {
-      command: 'register',
-      relay: false,
-      localPort: socketToServer.localPort,
-      localAddress: socketToServer.localAddress,
-    },
-  ));
 });
 
 socketToServer.on('error', (e) => {
