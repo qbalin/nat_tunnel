@@ -84,11 +84,6 @@ class ClientPair {
       console.log(JSON.stringify(publicOrigin));
     }
   }
-
-  clear() {
-    this.clientAOriginDescriptor?.socket.end();
-    this.clientBOriginDescriptor?.socket.end();
-  }
 }
 
 const clientPair = new ClientPair();
@@ -172,11 +167,6 @@ const server = createServer((c) => {
               private: clientPair.clientAOriginDescriptor?.private,
             }),
           );
-
-          // The server must indicate the end of the communication for the client to be able to re-use
-          // the same outbound port in the future communication with the other peer.
-          // This requirement is OS dependant: on MacOS, it is not necessary. On Raspbian, it is.
-          clientPair.clear();
         }
       }
     }

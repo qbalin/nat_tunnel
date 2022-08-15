@@ -321,10 +321,11 @@ const handleDataFromServer = (data: string) => {
 
     const localPortUsedWithServer = socketToServer.localPort as number;
 
-    // 4. Waiting until the server closes the socket before trying to connect to the peer
-    // with the same outbound port: some OS (like Raspbian) would not allow to reuse the outbound
-    // port in a connection to the peer if that port were used in a connection to the server.
-    // It is important that the server be the one to end the connection to really free the port.
+    // 4. Close the socket: it is important that the client closes the socket first, as it frees
+    // the outbound port faster. If the server were to be the first closing, there is a risk that
+    // the socket will stay stuck in the TIME-WAIT state and be unresponsive for a minute.
+    // https://vincent.bernat.ch/en/blog/2014-tcp-time-wait-state-linux#about-the-time-wait-state
+    socketToServer.end();
     socketToServer.on('end', async () => {
       const abortController1 = new AbortController();
       const abortController2 = new AbortController();
