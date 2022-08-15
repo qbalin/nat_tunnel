@@ -230,7 +230,7 @@ const forwardPortThroughSocket = (socketToPeer: MultiplexSocket, portToForward: 
   }).listen(portToForward)
     .on('error', (e) => {
       console.log(e);
-      console.log('Service alread running on port', portToForward);
+      console.log('Service already running on port', portToForward);
     });
 };
 
