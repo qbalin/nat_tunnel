@@ -1,6 +1,6 @@
 # nat_tunnel
 
-Utility to make tunneling with NAT traversal easy. Think of STUN server / client, simpler - and less secure (no encryption yet).
+Utility to make tunneling with NAT traversal easy. Think of STUN/TURN server/client, simpler - and less secure (no encryption yet).
 
 Main resource: [Peer-to-Peer Communication Across Network Address Translators by Bryan Ford, Pyda Srisuresh & Dan Kegel](https://bford.info/pub/net/p2pnat/index.html)
 
@@ -8,31 +8,6 @@ Main resource: [Peer-to-Peer Communication Across Network Address Translators by
 ## What
 
 This utility allows to simply establish (when possible) a P2P connection between two clients behind a NAT using TCP hole punching.
-
-### Example: Telnet chat
-
-Assuming a server is running, on client A run:
-```bash
-node client.js --host rendez-vous.server.address --port rendez-vous.server.port --forward-port 2222
-```
-
-on client B run:
-```bash
-node client.js --host rendez-vous.server.address --port rendez-vous.server.port --forward-port 2223
-```
-
-on client A run:
-```bash
-telnet localhost 2222
-```
-
-on client B run:
-```bash
-telnet localhost 2223
-```
-
-:tada: You've got yourself a chat via NAT traversal!
-
 
 ### Example: Exposing a service
 
